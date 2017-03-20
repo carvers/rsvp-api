@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"code.secondbit.org/trout.hg"
 	"darlinggo.co/api"
+	"darlinggo.co/trout"
 
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
@@ -15,10 +15,10 @@ const scope = "https://www.googleapis.com/auth/userinfo.email"
 
 func init() {
 	var router trout.Router
-	router.Endpoint("/parties").Methods("PUT").Handler(api.CORSMiddleware(http.HandlerFunc(putPartiesHandler)))
-	router.Endpoint("/parties").Methods("GET").Handler(api.CORSMiddleware(http.HandlerFunc(getPartiesHandler)))
-	router.Endpoint("/people").Methods("PUT").Handler(api.CORSMiddleware(http.HandlerFunc(putPeopleHandler)))
-	router.Endpoint("/people").Methods("GET").Handler(api.CORSMiddleware(http.HandlerFunc(getPeopleHandler)))
+	router.Endpoint("/parties").Methods("PUT", "OPTIONS").Handler(api.CORSMiddleware(http.HandlerFunc(putPartiesHandler)))
+	router.Endpoint("/parties").Methods("GET", "OPTIONS").Handler(api.CORSMiddleware(http.HandlerFunc(getPartiesHandler)))
+	router.Endpoint("/people").Methods("PUT", "OPTIONS").Handler(api.CORSMiddleware(http.HandlerFunc(putPeopleHandler)))
+	router.Endpoint("/people").Methods("GET", "OPTIONS").Handler(api.CORSMiddleware(http.HandlerFunc(getPeopleHandler)))
 	http.Handle("/", router)
 }
 
@@ -114,6 +114,12 @@ func getPartiesHandler(w http.ResponseWriter, r *http.Request) {
 	case partyWord != "":
 		party, err := GetPartyByMagicWord(ctx, partyWord)
 		if err != nil {
+			if err == ErrMagicWordNotFound {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprintf(w, "%+v\n", err)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "%+v\n", err)
 			return
 		}
