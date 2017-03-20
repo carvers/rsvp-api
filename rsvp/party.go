@@ -24,12 +24,7 @@ type Party struct {
 	LeadID    string         `datastore:"-" json:"lead,omitempty"`
 	Name      string         `json:"name,omitempty"`
 	SortValue string         `json:"sortValue"`
-	NumPeople int            `json:"numPeople,omitempty"`
-	Replied   bool           `json:"replied"`
-	NumComing int            `json:"numComing,omitempty"`
 	Address   string         `json:"address,omitempty"`
-	Email     string         `json:"email,omitempty"`
-	Phone     string         `json:"phone,omitempty"`
 	MagicWord string         `json:"codeWord,omitempty"`
 }
 
@@ -67,6 +62,7 @@ type Person struct {
 	Party                *datastore.Key `json:"-"`
 	PartyID              string         `datastore:"-" json:"party,omitempty"`
 	Name                 string         `json:"name,omitempty"`
+	Email                string         `json:"email,omitempty"`
 	GetsPlusOne          bool           `json:"getsPlusOne"`
 	PlusOne              *datastore.Key `json:"-"`
 	PlusOneID            string         `datastore:"-" json:"plusOne,omitempty"`
@@ -76,6 +72,7 @@ type Person struct {
 	Replied              bool           `json:"replied"`
 	Reply                bool           `json:"reply"`
 	DietaryRestrictions  string         `json:"dietaryRestrictions,omitempty"`
+	SongRequest          string         `json:"songRequest,omitempty"`
 	IsChild              bool           `json:"isChild"`
 	WillAccompany        *datastore.Key `json:"-"`
 	WillAccompanyID      string         `datastore:"-" json:"willAccompany,omitempty"`
@@ -92,7 +89,7 @@ func (p Person) FillKeyIDs(ctx context.Context) Person {
 		p.PartyID = p.Party.StringID()
 	}
 	if p.Party == nil && p.PartyID != "" {
-		p.Party = datastore.NewKey(ctx, personKind, p.PartyID, 0, nil)
+		p.Party = datastore.NewKey(ctx, partyKind, p.PartyID, 0, nil)
 	}
 	if p.PlusOne != nil && p.PlusOneID == "" {
 		p.PlusOneID = p.PlusOne.StringID()
@@ -188,7 +185,7 @@ func GetPartyByMagicWord(ctx context.Context, word string) (Party, error) {
 func ListPeople(ctx context.Context, party *datastore.Key) ([]Person, error) {
 	q := datastore.NewQuery("Person")
 	if party != nil {
-		q.Filter("Party =", party)
+		q = q.Filter("Party =", party)
 	}
 	result := q.Run(ctx)
 	var err error
