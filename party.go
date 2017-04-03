@@ -1,13 +1,14 @@
-package rsvp
+package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"log"
 
-	"code.secondbit.org/uuid.hg"
+	"darlinggo.co/pan"
 
-	"golang.org/x/net/context"
-	"google.golang.org/appengine"
-	"google.golang.org/appengine/datastore"
+	"github.com/pborman/uuid"
 )
 
 const (
@@ -19,222 +20,223 @@ var (
 	ErrMagicWordNotFound = errors.New("magic word not found")
 )
 
+type Dependencies struct {
+	db  *sql.DB
+	log *log.Logger
+}
+
 type Party struct {
-	ID        string         `datastore:"-" json:"ID"`
-	Lead      *datastore.Key `json:"-"`
-	LeadID    string         `datastore:"-" json:"lead,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	SortValue string         `json:"sortValue"`
-	Address   string         `json:"address,omitempty"`
-	MagicWord string         `json:"codeWord,omitempty"`
+	ID        string `json:"ID"`
+	LeadID    string `json:"lead,omitempty"`
+	Name      string `json:"name,omitempty"`
+	SortValue string `json:"sortValue"`
+	Address   string `json:"address,omitempty"`
+	MagicWord string `json:"codeWord,omitempty"`
 }
 
-func (p Party) Key(ctx context.Context) *datastore.Key {
-	return datastore.NewKey(ctx, partyKind, p.ID, 0, nil)
+func (p Party) GetSQLTableName() string {
+	return "parties"
 }
 
-func (p Party) FillKeyIDs(ctx context.Context) Party {
-	if p.Lead != nil && p.LeadID == "" {
-		p.LeadID = p.Lead.StringID()
-	}
-	if p.Lead == nil && p.LeadID != "" {
-		p.Lead = datastore.NewKey(ctx, partyKind, p.LeadID, 0, nil)
-	}
-	return p
-}
-
-func CreateParties(ctx context.Context, parties []Party) ([]Party, error) {
-	var keys []*datastore.Key
-	var err error
-	for pos, party := range parties {
+func (deps Dependencies) CreateParties(ctx context.Context, parties []Party) ([]Party, error) {
+	tabler := make([]pan.SQLTableNamer, 0, len(parties))
+	for _, party := range parties {
 		if party.ID == "" {
-			party.ID = uuid.NewID().String()
+			party.ID = uuid.New()
 		}
-		party = party.FillKeyIDs(ctx)
-		parties[pos] = party
-		keys = append(keys, party.Key(ctx))
+		tabler = append(tabler, party)
 	}
-	_, err = datastore.PutMulti(ctx, keys, parties)
+	query := pan.Insert(tabler[0], tabler[1:]...)
+	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return nil, err
+	}
+	_, err = deps.db.Exec(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
 	return parties, err
 }
 
 type Person struct {
-	ID                   string         `datastore:"-" json:"ID"`
-	Party                *datastore.Key `json:"-"`
-	PartyID              string         `datastore:"-" json:"party,omitempty"`
-	Name                 string         `json:"name,omitempty"`
-	Email                string         `json:"email,omitempty"`
-	GetsPlusOne          bool           `json:"getsPlusOne"`
-	PlusOne              *datastore.Key `json:"-"`
-	PlusOneID            string         `datastore:"-" json:"plusOne,omitempty"`
-	IsPlusOne            bool           `json:"isPlusOne"`
-	IsPlusOneOf          *datastore.Key `json:"-"`
-	IsPlusOneOfID        string         `datastore:"-" json:"isPlusOneOf,omitempty"`
-	Replied              bool           `json:"replied"`
-	Reply                bool           `json:"reply"`
-	DietaryRestrictions  string         `json:"dietaryRestrictions,omitempty"`
-	SongRequest          string         `json:"songRequest,omitempty"`
-	IsChild              bool           `json:"isChild"`
-	WillAccompany        *datastore.Key `json:"-"`
-	WillAccompanyID      string         `datastore:"-" json:"willAccompany,omitempty"`
-	BabysitterForWedding bool           `json:"babysitterForWedding"`
-	BabysitterForEvents  bool           `json:"babysitterForEvents"`
+	ID                  string `json:"ID"`
+	PartyID             string `json:"party,omitempty"`
+	Name                string `json:"name,omitempty"`
+	Email               string `json:"email,omitempty"`
+	GetsPlusOne         bool   `json:"getsPlusOne"`
+	PlusOneID           string `json:"plusOne,omitempty"`
+	IsPlusOne           bool   `json:"isPlusOne"`
+	IsPlusOneOfID       string `json:"isPlusOneOf,omitempty"`
+	Replied             bool   `json:"replied"`
+	Reply               bool   `json:"reply"`
+	DietaryRestrictions string `json:"dietaryRestrictions,omitempty"`
+	SongRequest         string `json:"songRequest,omitempty"`
+	IsChild             bool   `json:"isChild"`
+	WillAccompanyID     string `json:"willAccompany,omitempty"`
+
+	Hiking     bool
+	Kayaking   bool
+	Jetski     bool
+	Fishing    bool
+	Hanford    bool
+	Ligo       bool
+	Reach      bool
+	Bechtel    bool
+	Wine       bool
+	EscapeRoom bool `json:"escape-room"`
 }
 
-func (p Person) Key(ctx context.Context) *datastore.Key {
-	return datastore.NewKey(ctx, personKind, p.ID, 0, nil)
+func (p Person) GetSQLTableName() string {
+	return "people"
 }
 
-func (p Person) FillKeyIDs(ctx context.Context) Person {
-	if p.Party != nil && p.PartyID == "" {
-		p.PartyID = p.Party.StringID()
-	}
-	if p.Party == nil && p.PartyID != "" {
-		p.Party = datastore.NewKey(ctx, partyKind, p.PartyID, 0, nil)
-	}
-	if p.PlusOne != nil && p.PlusOneID == "" {
-		p.PlusOneID = p.PlusOne.StringID()
-	}
-	if p.PlusOne == nil && p.PlusOneID != "" {
-		p.PlusOne = datastore.NewKey(ctx, personKind, p.PlusOneID, 0, nil)
-	}
-	if p.IsPlusOneOf != nil && p.IsPlusOneOfID == "" {
-		p.IsPlusOneOfID = p.IsPlusOneOf.StringID()
-	}
-	if p.IsPlusOneOf == nil && p.IsPlusOneOfID != "" {
-		p.IsPlusOneOf = datastore.NewKey(ctx, personKind, p.IsPlusOneOfID, 0, nil)
-	}
-	if p.WillAccompany != nil && p.WillAccompanyID == "" {
-		p.WillAccompanyID = p.WillAccompany.StringID()
-	}
-	if p.WillAccompany == nil && p.WillAccompanyID != "" {
-		p.WillAccompany = datastore.NewKey(ctx, personKind, p.WillAccompanyID, 0, nil)
-	}
-	return p
-}
-
-func CreatePeople(ctx context.Context, people []Person) ([]Person, error) {
-	var keys []*datastore.Key
-	var err error
-	for pos, person := range people {
+func (deps Dependencies) CreatePeople(ctx context.Context, people []Person) ([]Person, error) {
+	tabler := make([]pan.SQLTableNamer, 0, len(people))
+	for _, person := range people {
 		if person.ID == "" {
-			person.ID = uuid.NewID().String()
+			person.ID = uuid.New()
 		}
-		person = person.FillKeyIDs(ctx)
-		people[pos] = person
-		keys = append(keys, person.Key(ctx))
+		tabler = append(tabler, person)
 	}
-	_, err = datastore.PutMulti(ctx, keys, people)
-	return people, err
-}
-
-func ListParties(ctx context.Context) ([]Party, error) {
-	q := datastore.NewQuery(partyKind).Order("Name")
-	result := q.Run(ctx)
-	var err error
-	var parties []Party
-	for err == nil {
-		var party Party
-		var key *datastore.Key
-		key, err = result.Next(&party)
-		if err == nil {
-			party.ID = key.StringID()
-			party = party.FillKeyIDs(ctx)
-			parties = append(parties, party)
-		}
-	}
-	if err == datastore.Done {
-		err = nil
-	}
-	return parties, err
-}
-
-func GetParties(ctx context.Context, ids []string) ([]Party, error) {
-	var keys []*datastore.Key
-	for _, id := range ids {
-		keys = append(keys, datastore.NewKey(ctx, partyKind, id, 0, nil))
-	}
-	parties := make([]Party, len(keys))
-	err := datastore.GetMulti(ctx, keys, parties)
+	query := pan.Insert(tabler[0], tabler[1:]...)
+	queryStr, err := query.PostgreSQLString()
 	if err != nil {
-		return []Party{}, err
+		return nil, err
 	}
-	for pos, party := range parties {
-		party.ID = keys[pos].StringID()
-		party = party.FillKeyIDs(ctx)
-		parties[pos] = party
+	_, err = deps.db.Exec(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
+	return people, nil
+}
+
+func (deps Dependencies) ListParties(ctx context.Context) ([]Party, error) {
+	var p Party
+	query := pan.New("SELECT FROM" + pan.Columns(p).String() + " FROM " + pan.Table(p)).OrderBy("sort_value").Flush(" ")
+	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := deps.db.Query(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
+	var parties []Party
+	for rows.Next() {
+		var party Party
+		err := pan.Unmarshal(rows, &party)
+		if err != nil {
+			return nil, err
+		}
+		parties = append(parties, party)
 	}
 	return parties, nil
 }
 
-func GetPartyByMagicWord(ctx context.Context, word string) (Party, error) {
-	q := datastore.NewQuery(partyKind).Filter("MagicWord =", word).Limit(1)
-	var parties []Party
-	keys, err := q.GetAll(ctx, &parties)
-	if err != nil {
-		return Party{}, err
+func (deps Dependencies) GetParties(ctx context.Context, ids []string) ([]Party, error) {
+	var p Party
+	ifIDs := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		ifIDs = append(ifIDs, id)
 	}
-	if len(parties) < 1 {
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
+	query.In(p, "ID", ifIDs...).OrderBy("sort_value").Flush(" ")
+	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := deps.db.Query(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
+	var parties []Party
+	for rows.Next() {
+		var party Party
+		err := pan.Unmarshal(rows, &party)
+		if err != nil {
+			return nil, err
+		}
+		parties = append(parties, party)
+	}
+	return parties, nil
+}
+
+func (deps Dependencies) GetPartyByMagicWord(ctx context.Context, word string) (Party, error) {
+	var p Party
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
+	query.Comparison(p, "MagicWord", "=", word).Limit(1)
+	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return p, err
+	}
+	rows, err := deps.db.Query(queryStr, query.Args()...)
+	if err != nil {
+		return p, err
+	}
+	var found bool
+	for rows.Next() {
+		err := pan.Unmarshal(rows, &p)
+		if err != nil {
+			return p, err
+		}
+		found = true
+	}
+	if !found {
 		return Party{}, ErrMagicWordNotFound
 	}
-	party := parties[0]
-	party.ID = keys[0].StringID()
-	party = party.FillKeyIDs(ctx)
-	return party, nil
+	return p, nil
 }
 
-func ListPeople(ctx context.Context, party *datastore.Key) ([]Person, error) {
-	q := datastore.NewQuery("Person")
-	if party != nil {
-		q = q.Filter("Party =", party)
+func (deps Dependencies) ListPeople(ctx context.Context, party string) ([]Person, error) {
+	var p Person
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
+	if party != "" {
+		query.Comparison(p, "PartyID", "=", party)
 	}
-	result := q.Run(ctx)
-	var err error
+	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := deps.db.Query(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
 	var people []Person
-	for err == nil {
+	for rows.Next() {
 		var person Person
-		var key *datastore.Key
-		key, err = result.Next(&person)
-		if err == nil {
-			person.ID = key.StringID()
-			person = person.FillKeyIDs(ctx)
-			people = append(people, person)
+		err := pan.Unmarshal(rows, &person)
+		if err != nil {
+			return nil, err
 		}
+		people = append(people, person)
 	}
-	if err == datastore.Done {
-		err = nil
-	}
-	return people, err
+	return people, nil
 }
 
-func GetPeople(ctx context.Context, ids []string) ([]Person, error) {
-	var keys []*datastore.Key
+func (deps Dependencies) GetPeople(ctx context.Context, ids []string) ([]Person, error) {
+	var p Person
+	ifIDs := make([]interface{}, 0, len(ids))
 	for _, id := range ids {
-		keys = append(keys, datastore.NewKey(ctx, personKind, id, 0, nil))
+		ifIDs = append(ifIDs, id)
 	}
-	people := make([]Person, len(keys))
-	var res []Person
-	if err := datastore.GetMulti(ctx, keys, people); err != nil {
-		me, ok := err.(appengine.MultiError)
-		if !ok {
-			return people, err
+
+	query := pan.New("SELECT "+pan.Columns(p).String()+" FROM "+pan.Table(p)).In(p, "ID", ifIDs...)
+	queryStr, err := query.PostgreSQLString()
+
+	rows, err := deps.db.Query(queryStr, query.Args()...)
+	if err != nil {
+		return nil, err
+	}
+
+	var people []Person
+	for rows.Next() {
+		var person Person
+		err := pan.Unmarshal(rows, &person)
+		if err != nil {
+			return nil, err
 		}
-		for i, merr := range me {
-			if merr == nil {
-				res = append(res, people[i])
-			} else if merr == datastore.ErrNoSuchEntity {
-				// keys[i] is missing
-				continue
-			} else {
-				// not a not-found error
-				return res, err
-			}
-		}
+		people = append(people, person)
 	}
-	for pos, person := range res {
-		person.ID = keys[pos].StringID()
-		person = person.FillKeyIDs(ctx)
-		res[pos] = person
-	}
-	return res, nil
+	return people, nil
 }
