@@ -6,6 +6,7 @@ import (
 	"code.secondbit.org/uuid.hg"
 
 	"golang.org/x/net/context"
+	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 )
 
@@ -212,14 +213,28 @@ func GetPeople(ctx context.Context, ids []string) ([]Person, error) {
 		keys = append(keys, datastore.NewKey(ctx, personKind, id, 0, nil))
 	}
 	people := make([]Person, len(keys))
-	err := datastore.GetMulti(ctx, keys, people)
-	if err != nil {
-		return people, err
+	var res []Person
+	if err := datastore.GetMulti(ctx, keys, people); err != nil {
+		me, ok := err.(appengine.MultiError)
+		if !ok {
+			return people, err
+		}
+		for i, merr := range me {
+			if merr == nil {
+				res = append(res, people[i])
+			} else if merr == datastore.ErrNoSuchEntity {
+				// keys[i] is missing
+				continue
+			} else {
+				// not a not-found error
+				return res, err
+			}
+		}
 	}
-	for pos, person := range people {
+	for pos, person := range res {
 		person.ID = keys[pos].StringID()
 		person = person.FillKeyIDs(ctx)
-		people[pos] = person
+		res[pos] = person
 	}
-	return people, nil
+	return res, nil
 }
