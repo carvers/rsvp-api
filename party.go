@@ -4,16 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 
 	"darlinggo.co/pan"
 
+	"github.com/coreos/go-oidc"
 	"github.com/pborman/uuid"
-)
-
-const (
-	partyKind  = "Party"
-	personKind = "Person"
 )
 
 var (
@@ -21,8 +18,9 @@ var (
 )
 
 type Dependencies struct {
-	db  *sql.DB
-	log *log.Logger
+	db       *sql.DB
+	log      *log.Logger
+	verifier *oidc.IDTokenVerifier
 }
 
 type Party struct {
@@ -38,6 +36,14 @@ func (p Party) GetSQLTableName() string {
 	return "parties"
 }
 
+func (p Party) getUpsertAction() string {
+	columns := pan.Columns(p)
+	for pos, column := range columns {
+		columns[pos] = fmt.Sprintf("%s = EXCLUDED.%s", column, column)
+	}
+	return columns.String()
+}
+
 func (deps Dependencies) CreateParties(ctx context.Context, parties []Party) ([]Party, error) {
 	tabler := make([]pan.SQLTableNamer, 0, len(parties))
 	for _, party := range parties {
@@ -46,11 +52,13 @@ func (deps Dependencies) CreateParties(ctx context.Context, parties []Party) ([]
 		}
 		tabler = append(tabler, party)
 	}
-	query := pan.Insert(tabler[0], tabler[1:]...)
+	query := pan.Insert(tabler...).Flush(", ").Expression("ON CONFLICT (" + pan.Column(parties[0], "ID") + ") DO UPDATE SET").Flush(" ")
+	query.Expression(parties[0].getUpsertAction()).Flush(", ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
 		return nil, err
 	}
+	deps.log.Println(queryStr)
 	_, err = deps.db.Exec(queryStr, query.Args()...)
 	if err != nil {
 		return nil, err
@@ -74,20 +82,28 @@ type Person struct {
 	IsChild             bool   `json:"isChild"`
 	WillAccompanyID     string `json:"willAccompany,omitempty"`
 
-	Hiking     bool
-	Kayaking   bool
-	Jetski     bool
-	Fishing    bool
-	Hanford    bool
-	Ligo       bool
-	Reach      bool
-	Bechtel    bool
-	Wine       bool
-	EscapeRoom bool `json:"escape-room"`
+	Hiking     bool `json:"hiking"`
+	Kayaking   bool `json:"kayaking"`
+	Jetski     bool `json:"jetski"`
+	Fishing    bool `json:"fishing"`
+	Hanford    bool `json:"hanford"`
+	Ligo       bool `json:"ligo"`
+	Reach      bool `json:"reach"`
+	Bechtel    bool `json:"bechtel"`
+	Wine       bool `json:"wine"`
+	EscapeRoom bool `json:"escapeRoom"`
 }
 
 func (p Person) GetSQLTableName() string {
 	return "people"
+}
+
+func (p Person) getUpsertAction() string {
+	columns := pan.Columns(p)
+	for pos, column := range columns {
+		columns[pos] = fmt.Sprintf("%s = EXCLUDED.%s", column, column)
+	}
+	return columns.String()
 }
 
 func (deps Dependencies) CreatePeople(ctx context.Context, people []Person) ([]Person, error) {
@@ -98,11 +114,13 @@ func (deps Dependencies) CreatePeople(ctx context.Context, people []Person) ([]P
 		}
 		tabler = append(tabler, person)
 	}
-	query := pan.Insert(tabler[0], tabler[1:]...)
+	query := pan.Insert(tabler...).Flush(", ").Expression("ON CONFLICT (" + pan.Column(people[0], "ID") + ") DO UPDATE SET").Flush(" ")
+	query.Expression(people[0].getUpsertAction()).Flush(", ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
 		return nil, err
 	}
+	deps.log.Println(queryStr)
 	_, err = deps.db.Exec(queryStr, query.Args()...)
 	if err != nil {
 		return nil, err
@@ -112,7 +130,7 @@ func (deps Dependencies) CreatePeople(ctx context.Context, people []Person) ([]P
 
 func (deps Dependencies) ListParties(ctx context.Context) ([]Party, error) {
 	var p Party
-	query := pan.New("SELECT FROM" + pan.Columns(p).String() + " FROM " + pan.Table(p)).OrderBy("sort_value").Flush(" ")
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p)).OrderBy("sort_value").Flush(" ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
 		return nil, err
@@ -139,7 +157,7 @@ func (deps Dependencies) GetParties(ctx context.Context, ids []string) ([]Party,
 	for _, id := range ids {
 		ifIDs = append(ifIDs, id)
 	}
-	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p)).Where()
 	query.In(p, "ID", ifIDs...).OrderBy("sort_value").Flush(" ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
@@ -163,8 +181,8 @@ func (deps Dependencies) GetParties(ctx context.Context, ids []string) ([]Party,
 
 func (deps Dependencies) GetPartyByMagicWord(ctx context.Context, word string) (Party, error) {
 	var p Party
-	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
-	query.Comparison(p, "MagicWord", "=", word).Limit(1)
+	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p)).Where()
+	query.Comparison(p, "MagicWord", "=", word).Limit(1).Flush(" ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
 		return p, err
@@ -191,8 +209,10 @@ func (deps Dependencies) ListPeople(ctx context.Context, party string) ([]Person
 	var p Person
 	query := pan.New("SELECT " + pan.Columns(p).String() + " FROM " + pan.Table(p))
 	if party != "" {
+		query.Where()
 		query.Comparison(p, "PartyID", "=", party)
 	}
+	query.Flush(" ")
 	queryStr, err := query.PostgreSQLString()
 	if err != nil {
 		return nil, err
@@ -221,8 +241,12 @@ func (deps Dependencies) GetPeople(ctx context.Context, ids []string) ([]Person,
 		ifIDs = append(ifIDs, id)
 	}
 
-	query := pan.New("SELECT "+pan.Columns(p).String()+" FROM "+pan.Table(p)).In(p, "ID", ifIDs...)
+	query := pan.New("SELECT "+pan.Columns(p).String()+" FROM "+pan.Table(p)).Where().In(p, "ID", ifIDs...).Flush(" ")
 	queryStr, err := query.PostgreSQLString()
+	if err != nil {
+		return nil, err
+	}
+	deps.log.Println("GetPeople query string:", queryStr)
 
 	rows, err := deps.db.Query(queryStr, query.Args()...)
 	if err != nil {

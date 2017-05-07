@@ -4,12 +4,20 @@ import (
 	"net/http"
 	"strings"
 
+	"code.impractical.co/googleid"
+
 	"darlinggo.co/api"
 	"darlinggo.co/trout"
 )
 
-func (deps Dependencies) Handler() http.Handler {
+var clientIDs = []string{
+	"32555940559.apps.googleusercontent.com",                                    // gcloud
+	"1056458701199-i7ehmjfmqcvkbspj79fvhqpb8d5o4nib.apps.googleusercontent.com", // wedding site
+}
+
+func (deps Dependencies) Handler(prefix string) http.Handler {
 	var router trout.Router
+	router.SetPrefix(prefix)
 	router.Endpoint("/parties").Methods("PUT", "OPTIONS").Handler(CORSMiddleware(http.HandlerFunc(deps.putPartiesHandler)))
 	router.Endpoint("/parties").Methods("GET", "OPTIONS").Handler(CORSMiddleware(http.HandlerFunc(deps.getPartiesHandler)))
 	router.Endpoint("/people").Methods("PUT", "OPTIONS").Handler(CORSMiddleware(http.HandlerFunc(deps.putPeopleHandler)))
@@ -22,6 +30,7 @@ func CORSMiddleware(h http.Handler) http.Handler {
 		host := r.Header.Get("Origin")
 		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimPrefix(host, "https://")
+		host = strings.Split(host, ":")[0]
 		if strings.HasSuffix(host, ".local") || host == "wedding.carvers.co" || host == "wedding.carvers.house" || host == "192.168.86.123" {
 			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			w.Header().Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
@@ -41,10 +50,28 @@ func CORSMiddleware(h http.Handler) http.Handler {
 func userIsAdmin(deps Dependencies, r *http.Request) bool {
 	token := r.Header.Get("Authorization")
 	if token == "" {
+		deps.log.Println("No authorization header")
 		return false
 	}
-	// TODO(paddy): decrypt token and check validity
-	return false
+	if !strings.HasPrefix(token, "Bearer ") {
+		deps.log.Printf("Authorization header began %q, expected \"Bearer \"\n", token)
+		return false
+	}
+	token = strings.TrimPrefix(token, "Bearer ")
+
+	tok, err := googleid.Decode(token)
+	if err != nil {
+		deps.log.Printf("Error verifying token: %+v\n", err)
+		return false
+	}
+	deps.log.Printf("Token: %+v\n", tok)
+	err = googleid.Verify(r.Context(), token, clientIDs, deps.verifier)
+	if err != nil {
+		deps.log.Printf("Error verifying token: %+v\n", err)
+		return false
+	}
+
+	return tok.Hd == "carvers.co"
 }
 
 func doWordsMatch(word string, parties []Party) bool {
@@ -211,11 +238,34 @@ func (deps Dependencies) getPeopleHandler(w http.ResponseWriter, r *http.Request
 	partyID := r.URL.Query().Get("party_id")
 	switch {
 	case len(personIDs) > 0:
-		// TODO(paddy): authenticate; use the codeWord and only allow retrieving people from that party
 		people, err = deps.GetPeople(r.Context(), personIDs)
 		if err != nil {
 			deps.log.Printf("%+v\n", err)
+			api.Encode(w, r, http.StatusInternalServerError, Response{Errors: api.ActOfGodError})
 			return
+		}
+		partyIDMap := map[string]struct{}{}
+		for _, person := range people {
+			partyIDMap[person.PartyID] = struct{}{}
+		}
+		partyIDs := make([]string, 0, len(partyIDMap))
+		for party := range partyIDMap {
+			partyIDs = append(partyIDs, party)
+		}
+		if len(partyIDs) != 1 && !userIsAdmin(deps, r) { // if they're not requesting a single party and not an admin, something is up
+			api.Encode(w, r, http.StatusForbidden, Response{Errors: api.AccessDeniedError})
+			return
+		} else if len(partyIDs) == 1 {
+			parties, err := deps.GetParties(r.Context(), partyIDs)
+			if err != nil {
+				deps.log.Printf("%+v\n", err)
+				api.Encode(w, r, http.StatusInternalServerError, Response{Errors: api.ActOfGodError})
+				return
+			}
+			if !doWordsMatch(r.Header.Get("Code-Word"), parties) {
+				api.Encode(w, r, http.StatusForbidden, Response{Errors: api.AccessDeniedError})
+				return
+			}
 		}
 	default:
 		if !userIsAdmin(deps, r) && partyID == "" {
