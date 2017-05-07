@@ -1,0 +1,20 @@
+wedding.carvers.co {
+        gzip
+        log stdout
+        errors {
+                log stderr
+                404 404.html
+        }
+        root /var/www/wedding.carvers.co
+        proxy /api localhost:4004
+        expires {
+                match .js$ 1d
+                match .png$ 1d
+                match .css$ 1d
+                match .jpg$ 1d
+        }
+}
+
+www.wedding.carvers.co {
+        redir https://wedding.carvers.co{uri}
+}
